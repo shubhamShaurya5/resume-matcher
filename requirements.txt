@@ -1,0 +1,6 @@
+flask
+joblib
+scikit-learn
+PyPDF2
+fuzzywuzzy
+python-Levenshtein
