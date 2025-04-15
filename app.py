@@ -3,111 +3,108 @@ import PyPDF2
 import joblib
 import re
 import spacy
+import os
 from difflib import get_close_matches
-import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
 
-# Load spaCy model
-nlp = spacy.load("en_core_web_sm")
+# Ensure spaCy model is available
+try:
+    nlp = spacy.load("en_core_web_sm")
+except:
+    os.system("python -m spacy download en_core_web_sm")
+    nlp = spacy.load("en_core_web_sm")
 
 # Load model and vectorizer
-model = joblib.load("C:/Users/shaur/Desktop/resume_classifier_model.pkl")
-vectorizer = joblib.load("C:/Users/shaur/Desktop/tfidf_vectorizer.pkl")
+model = joblib.load("resume_classifier_model.pkl")
+vectorizer = joblib.load("tfidf_vectorizer.pkl")
 
-# ---------- Text Extraction ----------
+# PDF Text Extraction
 def extract_text_from_pdf(pdf_file):
     pdf_reader = PyPDF2.PdfReader(pdf_file)
     text = ""
     for page in pdf_reader.pages:
-        if page.extract_text():
-            text += page.extract_text()
+        text += page.extract_text() + " "
     return text
 
-# ---------- Improved Skill Extraction ----------
+# Extract section-specific info
+def extract_section(text, keyword):
+    pattern = rf"{keyword}.*?(?=\n[A-Z][^\n]*?:|\Z)"
+    matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+    return matches[0] if matches else ""
+
+# Extract top 5 skills using NLP
 def extract_skills(text):
-    doc = nlp(text.lower())
-    tokens = [token.text.strip() for token in doc if token.pos_ in ['NOUN', 'PROPN']]
-    
-    filtered = []
-    for tok in tokens:
-        if (len(tok) > 2 and tok.isalpha() and
-            not tok in nlp.Defaults.stop_words and
-            not re.match(r'^\+?\d+$', tok) and
-            not re.search(r'@\w+|\.com|http', tok)):
-            filtered.append(tok)
+    skill_text = extract_section(text, "Skills")
+    if not skill_text:
+        return ["No skills found"]
+    doc = nlp(skill_text)
+    words = [token.text.lower() for token in doc if token.pos_ in ['NOUN', 'PROPN'] and len(token.text) > 2]
+    filtered = [w for w in words if not nlp.vocab[w].is_stop]
+    return list(dict.fromkeys(filtered))[:5] if filtered else ["No skills found"]
 
-    freq = pd.Series(filtered).value_counts().head(5)
-    return list(freq.index)
-
-# ---------- Education Extraction ----------
+# Education extractor
 def extract_education(text):
-    keywords = ['bachelor', 'master', 'b.tech', 'm.tech', 'phd', 'graduation', 'degree', 'university']
-    return list(set([k for k in keywords if k in text.lower()]))
+    edu_section = extract_section(text, "Education")
+    keywords = ['bachelor', 'master', 'b.tech', 'm.tech', 'phd', 'mba', 'msc', 'degree']
+    edu_found = [kw for kw in keywords if kw in edu_section.lower()]
+    return edu_found if edu_found else ["Not found"]
 
-# ---------- Experience Extraction ----------
+# Experience extractor
 def extract_experience(text):
-    pattern = r'(\d+)\+?\s+(years|yrs)\s+(of)?\s+experience'
-    matches = re.findall(pattern, text.lower())
-    return matches[0][0] + " years" if matches else "Not found"
+    exp_section = extract_section(text, "Experience")
+    match = re.search(r"(\d+)\+?\s*(years|yrs)", exp_section.lower())
+    return match.group(0) if match else "Not found"
 
-# ---------- Skill Matching ----------
-def fuzzy_skill_match(resume_skills, jd_text):
+# Fuzzy matching
+def fuzzy_skill_match(skills, jd_text):
     matched, missing = [], []
-    for skill in resume_skills:
-        if get_close_matches(skill, jd_text.split(), cutoff=0.7):
+    jd_words = jd_text.lower().split()
+    for skill in skills:
+        if get_close_matches(skill, jd_words, cutoff=0.7):
             matched.append(skill)
         else:
             missing.append(skill)
     return matched, missing
 
-# ---------- Streamlit UI ----------
-st.set_page_config(page_title="Resume Matcher", layout="centered")
-st.title("📄 Resume Matcher ")
-st.markdown("Upload a PDF resume and (optionally) paste a job description to analyze compatibility.")
+# UI Setup
+st.set_page_config(page_title="Resume Matcher", page_icon="📄", layout="centered")
+st.title("📄 Resume Matcher App")
+st.markdown("Upload your resume and (optionally) a job description to check compatibility.")
 
-resume_file = st.file_uploader("📎 Upload Resume (PDF)", type=["pdf"])
-job_description = st.text_area("📋 Paste Job Description (Optional)", "")
+# Upload resume
+resume_file = st.file_uploader("📤 Upload Resume (PDF Only)", type=["pdf"])
+job_desc = st.text_area("📋 Paste Job Description (Optional)", "")
 
 if resume_file:
     resume_text = extract_text_from_pdf(resume_file)
-    cleaned_resume = re.sub(r'[^a-zA-Z ]', ' ', resume_text.lower())
+    cleaned_text = re.sub(r'[^a-zA-Z ]', ' ', resume_text.lower())
 
-    # 🔮 Predict Category
-    vectorized = vectorizer.transform([cleaned_resume])
+    # Prediction
+    vectorized = vectorizer.transform([cleaned_text])
     prediction = model.predict(vectorized)[0]
-    st.success(f"📂 Predicted Resume Category: `{prediction}`")
+    st.success(f"📂 Predicted Resume Category: **{prediction}**")
 
-    # 🧠 Extract Key Info
+    # Section Extraction
     skills = extract_skills(resume_text)
     education = extract_education(resume_text)
     experience = extract_experience(resume_text)
 
-    # 🎓 Education
-    st.markdown("### 🎓 Education")
-    st.write(", ".join(education) if education else "Not found")
+    st.subheader("🛠️ Top 5 Skills Extracted")
+    st.write(", ".join(skills))
 
-    # 💼 Experience
-    st.markdown("### 💼 Experience")
+    st.subheader("🎓 Education")
+    st.write(", ".join(education))
+
+    st.subheader("💼 Experience")
     st.write(experience)
 
-    # 🛠️ Skills
-    st.markdown("### 🛠️ Top 5 Skills Extracted")
-    st.write(", ".join(skills) if skills else "No relevant skills found")
+    # Job Description Matching
+    if job_desc.strip():
+        matched, missing = fuzzy_skill_match(skills, job_desc)
+        st.subheader("✅ Skills Matched with Job Description")
+        st.write(", ".join(matched) if matched else "No matched skills")
 
-    # 🔍 Skill Matching
-    if job_description.strip():
-        matched, missing = fuzzy_skill_match(skills, job_description.lower())
-        st.markdown("### ✅ Matched Skills with Job Description")
-        st.write(", ".join(matched) if matched else "No matches")
-
-        st.markdown("### ❌ Missing Skills from Job Description")
-        st.write(", ".join(missing) if missing else "None – Great Match!")
-
-        # 📊 Match Score
-        if matched or missing:
-            match_score = round((len(matched) / (len(matched) + len(missing))) * 100, 2)
-            st.markdown("### 📊 Match Score")
-            st.success(f"Your resume matches **{match_score}%** of the required skills.")
+        st.subheader("❌ Missing Skills from Job Description")
+        st.write(", ".join(missing) if missing else "None – Perfect match!")
     else:
-        st.info("📝 Job Description not provided. Showing extracted resume data only.")
-else:
-    st.info("📤 Please upload a PDF resume to begin.")
+        st.info("ℹ️ Job Description not provided. Showing extracted resume details only.")
