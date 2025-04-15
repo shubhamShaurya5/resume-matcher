@@ -6,6 +6,9 @@ fuzzywuzzy
 python-Levenshtein
 streamlit
 spacy
+fuzzywuzzy
+
+
 
 
 
